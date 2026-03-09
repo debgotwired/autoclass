@@ -20,7 +20,18 @@ interface ClassificationResult {
   error?: string
 }
 
-type Step = 'upload' | 'categories' | 'classifying' | 'results'
+type Step = 'upload' | 'preview' | 'categories' | 'classifying' | 'results'
+
+// Cost per 1M tokens for gpt-4o-mini (input + output avg)
+const COST_PER_1M_TOKENS = 0.15
+const AVG_TOKENS_PER_TICKET = 100 // rough estimate
+
+function estimateCost(ticketCount: number): string {
+  const tokens = ticketCount * AVG_TOKENS_PER_TICKET
+  const cost = (tokens / 1_000_000) * COST_PER_1M_TOKENS
+  if (cost < 0.01) return '<$0.01'
+  return `~$${cost.toFixed(2)}`
+}
 
 // Proper CSV parsing that handles quotes and newlines
 function parseCSV(text: string): Ticket[] {
@@ -29,7 +40,6 @@ function parseCSV(text: string): Ticket[] {
   let currentLine = ''
   let insideQuotes = false
 
-  // Handle CRLF and LF
   const chars = text.replace(/\r\n/g, '\n').split('')
 
   for (let i = 0; i < chars.length; i++) {
@@ -37,7 +47,6 @@ function parseCSV(text: string): Ticket[] {
 
     if (char === '"') {
       if (insideQuotes && chars[i + 1] === '"') {
-        // Escaped quote
         currentLine += '"'
         i++
       } else {
@@ -64,7 +73,6 @@ function parseCSV(text: string): Ticket[] {
     ['text', 'ticket_text', 'message', 'content', 'description', 'body', 'ticket'].includes(h)
   )
 
-  // Parse each row
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]
     if (!line.trim()) continue
@@ -115,7 +123,10 @@ export default function Home() {
   const [error, setError] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
+  const [editingCategory, setEditingCategory] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
   const abortControllerRef = useRef<AbortController | null>(null)
+  const lastRequestTime = useRef<number>(0)
 
   useEffect(() => {
     try {
@@ -160,7 +171,6 @@ export default function Home() {
     const reader = new FileReader()
     reader.onload = (e) => {
       const text = e.target?.result as string
-      // Use setTimeout to allow UI to update
       setTimeout(() => {
         const parsed = parseCSV(text)
         setIsParsing(false)
@@ -169,6 +179,7 @@ export default function Home() {
           return
         }
         setTickets(parsed)
+        setStep('preview')
       }, 10)
     }
     reader.onerror = () => {
@@ -201,7 +212,6 @@ export default function Home() {
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    // Only set dragOver false if we're leaving the drop zone itself
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX
     const y = e.clientY
@@ -210,6 +220,20 @@ export default function Home() {
     }
   }, [])
 
+  // Rate limiting helper
+  const rateLimitedFetch = async (url: string, options: RequestInit) => {
+    const now = Date.now()
+    const timeSinceLastRequest = now - lastRequestTime.current
+    const minInterval = 100 // 100ms between requests
+
+    if (timeSinceLastRequest < minInterval) {
+      await new Promise(resolve => setTimeout(resolve, minInterval - timeSinceLastRequest))
+    }
+
+    lastRequestTime.current = Date.now()
+    return fetch(url, options)
+  }
+
   const generateCategories = async () => {
     if (!apiKey || tickets.length === 0 || isGenerating) return
 
@@ -217,7 +241,6 @@ export default function Home() {
     setError('')
 
     try {
-      // Only send sampled tickets to the server to avoid memory issues
       const sampleSize = Math.min(50, tickets.length)
       const step = Math.max(1, Math.floor(tickets.length / sampleSize))
       const sampledTickets: Ticket[] = []
@@ -225,7 +248,7 @@ export default function Home() {
         sampledTickets.push(tickets[i])
       }
 
-      const response = await fetch('/api/generate-categories', {
+      const response = await rateLimitedFetch('/api/generate-categories', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -268,13 +291,45 @@ export default function Home() {
       setError('Category already exists')
       return
     }
-    setError('') // Clear error on success
+    setError('')
     setCategories([...categories, { name, description: 'Custom category' }])
     setNewCategoryName('')
   }
 
   const removeCategory = (name: string) => {
     setCategories(categories.filter(c => c.name !== name))
+  }
+
+  const startEditCategory = (name: string) => {
+    setEditingCategory(name)
+    setEditValue(name)
+    setError('')
+  }
+
+  const saveEditCategory = () => {
+    if (!editingCategory) return
+
+    const newName = editValue.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+    if (!newName) {
+      setError('Category name must contain letters or numbers')
+      return
+    }
+    if (newName !== editingCategory && categories.some(c => c.name === newName)) {
+      setError('Category already exists')
+      return
+    }
+
+    setCategories(categories.map(c =>
+      c.name === editingCategory ? { ...c, name: newName } : c
+    ))
+    setEditingCategory(null)
+    setEditValue('')
+    setError('')
+  }
+
+  const cancelEditCategory = () => {
+    setEditingCategory(null)
+    setEditValue('')
   }
 
   const cancelClassification = () => {
@@ -304,14 +359,13 @@ export default function Home() {
       const categoryNames = categories.map(c => c.name)
 
       for (let i = 0; i < tickets.length; i += chunkSize) {
-        // Check if cancelled
         if (abortControllerRef.current?.signal.aborted) {
           throw new Error('Cancelled')
         }
 
         const chunk = tickets.slice(i, i + chunkSize)
 
-        const response = await fetch('/api/classify', {
+        const response = await rateLimitedFetch('/api/classify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -337,7 +391,6 @@ export default function Home() {
 
     } catch (err: any) {
       if (err.name === 'AbortError' || err.message === 'Cancelled') {
-        // Already handled in cancelClassification
         return
       }
       setError(err.message || 'Classification failed')
@@ -422,91 +475,136 @@ export default function Home() {
 
       {/* Step 1: Upload */}
       {step === 'upload' && (
-        <>
-          <div
-            className={`upload-zone ${dragOver ? 'dragover' : ''} ${!keySaved ? 'disabled' : ''}`}
-            onDragOver={handleDragOver}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDrop={keySaved ? handleDrop : undefined}
-            onClick={() => {
-              if (!keySaved || isParsing) return
-              const input = document.createElement('input')
-              input.type = 'file'
-              input.accept = '.csv'
-              input.onchange = (e) => {
-                const file = (e.target as HTMLInputElement).files?.[0]
-                if (file) handleFile(file)
-              }
-              input.click()
-            }}
-            role="button"
-            tabIndex={keySaved ? 0 : -1}
-            aria-label="Upload CSV file"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.currentTarget.click()
-              }
-            }}
-          >
-            <div className="upload-icon">{isParsing ? '⏳' : '📄'}</div>
-            <div className="upload-text">
-              {isParsing
-                ? 'Parsing CSV...'
-                : tickets.length > 0
-                  ? `${tickets.length.toLocaleString()} tickets loaded`
-                  : 'Drop CSV here or click to browse'}
-            </div>
-            <div className="upload-hint">
-              {!keySaved
-                ? 'Add your API key first'
-                : 'CSV should have a "text" column. No file size limit.'}
-            </div>
+        <div
+          className={`upload-zone ${dragOver ? 'dragover' : ''} ${!keySaved ? 'disabled' : ''}`}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDrop={keySaved ? handleDrop : undefined}
+          onClick={() => {
+            if (!keySaved || isParsing) return
+            const input = document.createElement('input')
+            input.type = 'file'
+            input.accept = '.csv'
+            input.onchange = (e) => {
+              const file = (e.target as HTMLInputElement).files?.[0]
+              if (file) handleFile(file)
+            }
+            input.click()
+          }}
+          role="button"
+          tabIndex={keySaved ? 0 : -1}
+          aria-label="Upload CSV file"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.currentTarget.click()
+            }
+          }}
+        >
+          <div className="upload-icon">{isParsing ? '⏳' : '📄'}</div>
+          <div className="upload-text">
+            {isParsing
+              ? 'Parsing CSV...'
+              : 'Drop CSV here or click to browse'}
           </div>
-
-          {tickets.length > 0 && !isParsing && (
-            <div className="progress-section">
-              <p style={{ marginBottom: '1rem' }}>
-                <strong>{tickets.length.toLocaleString()}</strong> tickets ready
-              </p>
-              <button onClick={generateCategories} disabled={isGenerating}>
-                {isGenerating ? 'Analyzing tickets...' : 'Generate Categories'}
-              </button>
-              <button
-                className="secondary"
-                style={{ marginLeft: '0.5rem' }}
-                onClick={() => setTickets([])}
-              >
-                Clear
-              </button>
-            </div>
-          )}
-        </>
+          <div className="upload-hint">
+            {!keySaved
+              ? 'Add your API key first'
+              : 'CSV should have a "text" column. No file size limit.'}
+          </div>
+        </div>
       )}
 
-      {/* Step 2: Review Categories */}
+      {/* Step 2: Preview */}
+      {step === 'preview' && (
+        <div className="preview-section">
+          <h2>Preview Tickets</h2>
+          <p className="subtitle" style={{ marginBottom: '1rem' }}>
+            Loaded <strong>{tickets.length.toLocaleString()}</strong> tickets. Here's a sample:
+          </p>
+
+          <div className="ticket-preview">
+            {tickets.slice(0, 5).map((t, i) => (
+              <div key={t.id} className="ticket-preview-item">
+                <span className="ticket-num">#{i + 1}</span>
+                <span className="ticket-text">{t.text}</span>
+              </div>
+            ))}
+            {tickets.length > 5 && (
+              <div className="ticket-preview-more">
+                +{(tickets.length - 5).toLocaleString()} more tickets
+              </div>
+            )}
+          </div>
+
+          <div className="cost-estimate">
+            <span>Estimated cost:</span>
+            <strong>{estimateCost(tickets.length)}</strong>
+            <span className="cost-note">(gpt-4o-mini)</span>
+          </div>
+
+          <div className="action-buttons">
+            <button onClick={generateCategories} disabled={isGenerating}>
+              {isGenerating ? 'Analyzing...' : 'Generate Categories'}
+            </button>
+            <button className="secondary" onClick={() => { setTickets([]); setStep('upload') }}>
+              Upload Different File
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: Review Categories */}
       {step === 'categories' && (
         <div className="categories-section">
           <h2>Review Categories</h2>
           <p className="subtitle" style={{ marginBottom: '1.5rem' }}>
-            Generated from your {tickets.length.toLocaleString()} tickets. Add, remove, or edit before classifying.
+            Generated from your {tickets.length.toLocaleString()} tickets. Click a category name to edit.
           </p>
 
           <div className="category-list">
             {categories.map((cat) => (
               <div key={cat.name} className="category-item">
                 <div className="category-info">
-                  <span className="category-name">{cat.name}</span>
-                  <span className="category-desc">{cat.description}</span>
+                  {editingCategory === cat.name ? (
+                    <div className="category-edit">
+                      <input
+                        type="text"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveEditCategory()
+                          if (e.key === 'Escape') cancelEditCategory()
+                        }}
+                        autoFocus
+                        aria-label="Edit category name"
+                      />
+                      <button className="small" onClick={saveEditCategory}>Save</button>
+                      <button className="small secondary" onClick={cancelEditCategory}>Cancel</button>
+                    </div>
+                  ) : (
+                    <>
+                      <span
+                        className="category-name editable"
+                        onClick={() => startEditCategory(cat.name)}
+                        title="Click to edit"
+                      >
+                        {cat.name}
+                      </span>
+                      <span className="category-desc">{cat.description}</span>
+                    </>
+                  )}
                 </div>
-                <button
-                  className="remove-btn"
-                  onClick={() => removeCategory(cat.name)}
-                  title="Remove category"
-                  aria-label={`Remove ${cat.name} category`}
-                >
-                  ×
-                </button>
+                {editingCategory !== cat.name && (
+                  <button
+                    className="remove-btn"
+                    onClick={() => removeCategory(cat.name)}
+                    title="Remove category"
+                    aria-label={`Remove ${cat.name} category`}
+                  >
+                    ×
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -523,18 +621,24 @@ export default function Home() {
             <button onClick={addCategory} disabled={!newCategoryName.trim()}>Add</button>
           </div>
 
+          <div className="cost-estimate">
+            <span>Estimated cost:</span>
+            <strong>{estimateCost(tickets.length)}</strong>
+            <span className="cost-note">for {tickets.length.toLocaleString()} tickets</span>
+          </div>
+
           <div className="action-buttons">
             <button onClick={classify} disabled={categories.length === 0}>
               Classify {tickets.length.toLocaleString()} Tickets
             </button>
-            <button className="secondary" onClick={() => setStep('upload')}>
+            <button className="secondary" onClick={() => setStep('preview')}>
               Back
             </button>
           </div>
         </div>
       )}
 
-      {/* Step 3: Classifying */}
+      {/* Step 4: Classifying */}
       {step === 'classifying' && (
         <div className="progress-section">
           <div className="progress-header">
@@ -557,7 +661,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Step 4: Results */}
+      {/* Step 5: Results */}
       {step === 'results' && (
         <div className="results-section">
           <div className="results-header">
