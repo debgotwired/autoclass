@@ -1,0 +1,89 @@
+import { NextRequest, NextResponse } from 'next/server'
+import OpenAI from 'openai'
+
+const GENERATE_CATEGORIES_PROMPT = `You are an expert at analyzing customer support tickets and creating classification taxonomies.
+
+Given a sample of customer support tickets, create a set of categories that would work well for classifying ALL tickets in a dataset like this.
+
+Guidelines:
+- Create 5-15 categories (aim for the sweet spot - enough to be useful, not so many that they overlap)
+- Categories should be mutually exclusive and collectively exhaustive
+- Use lowercase_with_underscores format
+- Include an "other" category for edge cases
+- Consider the specific domain and vocabulary in these tickets
+
+Respond with a JSON array of category objects, each with:
+- "name": the category name (lowercase_with_underscores)
+- "description": a brief description of what tickets belong here (1 sentence)
+
+Example response:
+[
+  {"name": "billing_issue", "description": "Charges, refunds, payment problems, invoice questions"},
+  {"name": "shipping_delay", "description": "Late deliveries, tracking updates, lost packages"},
+  {"name": "other", "description": "Tickets that don't fit other categories"}
+]
+
+Respond with ONLY the JSON array, no other text.`
+
+export async function POST(request: NextRequest) {
+  try {
+    const { tickets, apiKey } = await request.json()
+
+    if (!apiKey) {
+      return NextResponse.json({ error: 'API key required' }, { status: 400 })
+    }
+
+    if (!tickets || !Array.isArray(tickets) || tickets.length === 0) {
+      return NextResponse.json({ error: 'No tickets provided' }, { status: 400 })
+    }
+
+    const client = new OpenAI({ apiKey })
+
+    // Sample up to 50 tickets for category generation (spread evenly through the dataset)
+    const sampleSize = Math.min(50, tickets.length)
+    const step = Math.floor(tickets.length / sampleSize)
+    const sampledTickets = []
+    for (let i = 0; i < tickets.length && sampledTickets.length < sampleSize; i += Math.max(1, step)) {
+      sampledTickets.push(tickets[i])
+    }
+
+    const ticketList = sampledTickets
+      .map((t: { text: string }, i: number) => `${i + 1}. ${t.text}`)
+      .join('\n')
+
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: GENERATE_CATEGORIES_PROMPT },
+        { role: 'user', content: `Here are ${sampledTickets.length} sample tickets from a dataset of ${tickets.length} total:\n\n${ticketList}` }
+      ],
+      temperature: 0.3,
+      max_tokens: 1000,
+    })
+
+    const content = response.choices[0]?.message?.content?.trim() || '[]'
+
+    // Parse the JSON response
+    let categories
+    try {
+      categories = JSON.parse(content)
+    } catch {
+      // Try to extract JSON from the response if it has extra text
+      const jsonMatch = content.match(/\[[\s\S]*\]/)
+      if (jsonMatch) {
+        categories = JSON.parse(jsonMatch[0])
+      } else {
+        throw new Error('Failed to parse categories from AI response')
+      }
+    }
+
+    return NextResponse.json({ categories })
+
+  } catch (error: any) {
+    console.error('Category generation error:', error)
+    return NextResponse.json(
+      { error: error.message || 'Category generation failed' },
+      { status: 500 }
+    )
+  }
+}

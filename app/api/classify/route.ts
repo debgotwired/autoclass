@@ -1,25 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 
-const SYSTEM_PROMPT = `You are a customer support ticket classifier.
-
-Given a customer message, classify it into the most appropriate category.
-Respond with ONLY the category name in lowercase with underscores, nothing else.
-
-Common categories include:
-- billing_issue (charges, refunds, payments, invoices)
-- account_access (login, password, account settings)
-- order_issue (wrong item, damaged, missing)
-- shipping_inquiry (tracking, delivery time, shipping options)
-- cancellation (cancel order, cancel subscription)
-- return_refund (return request, refund status)
-- product_question (product info, availability, specs)
-- technical_support (bugs, errors, app issues)
-- feedback (complaints, suggestions, compliments)
-- other (doesn't fit above categories)
-
-If unsure, pick the closest match. Always respond with a single category.`
-
 export async function POST(request: NextRequest) {
   try {
     const { tickets, apiKey, categories } = await request.json()
@@ -32,18 +13,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No tickets provided' }, { status: 400 })
     }
 
+    if (!categories || !Array.isArray(categories) || categories.length === 0) {
+      return NextResponse.json({ error: 'No categories provided' }, { status: 400 })
+    }
+
     const client = new OpenAI({ apiKey })
 
-    // Build custom prompt if categories provided
-    let systemPrompt = SYSTEM_PROMPT
-    if (categories && categories.length > 0) {
-      systemPrompt = `You are a customer support ticket classifier.
+    const systemPrompt = `You are a customer support ticket classifier.
 
 Given a customer message, classify it into ONE of these categories:
 ${categories.map((c: string) => `- ${c}`).join('\n')}
 
-Respond with ONLY the category name exactly as shown above, nothing else.`
-    }
+Rules:
+- Respond with ONLY the category name exactly as shown above
+- Pick the single best match
+- If truly ambiguous, pick the most likely category
+- Never respond with anything other than one of the listed categories`
 
     // Process tickets in parallel (with concurrency limit)
     const results = []

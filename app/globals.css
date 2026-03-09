@@ -285,3 +285,76 @@ footer a {
   margin-bottom: 1rem;
   font-size: 0.875rem;
 }
+
+/* Categories Section */
+.categories-section {
+  background: #171717;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.categories-section h2 {
+  font-size: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.category-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #262626;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+}
+
+.category-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.category-name {
+  font-weight: 500;
+  color: #10b981;
+}
+
+.category-desc {
+  font-size: 0.75rem;
+  color: #737373;
+}
+
+.remove-btn {
+  background: transparent;
+  color: #737373;
+  padding: 0.25rem 0.5rem;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.remove-btn:hover {
+  color: #ef4444;
+  background: transparent;
+}
+
+.add-category {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.add-category input {
+  flex: 1;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
