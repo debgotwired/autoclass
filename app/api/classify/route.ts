@@ -19,6 +19,10 @@ export async function POST(request: NextRequest) {
 
     const client = new OpenAI({ apiKey })
 
+    // Normalize categories for validation
+    const normalizedCategories = categories.map((c: string) => c.toLowerCase().trim())
+    const categorySet = new Set(normalizedCategories)
+
     const systemPrompt = `You are a customer support ticket classifier.
 
 Given a customer message, classify it into ONE of these categories:
@@ -44,18 +48,34 @@ Rules:
               model: 'gpt-4o-mini',
               messages: [
                 { role: 'system', content: systemPrompt },
-                { role: 'user', content: ticket.text }
+                { role: 'user', content: ticket.text.slice(0, 2000) } // Limit input length
               ],
               temperature: 0,
               max_tokens: 50,
             })
 
-            const category = response.choices[0]?.message?.content?.trim().toLowerCase() || 'other'
+            let category = response.choices[0]?.message?.content?.trim().toLowerCase() || ''
+
+            // Validate category is in the list
+            if (!categorySet.has(category)) {
+              // Try to find closest match (handles minor variations)
+              const found = normalizedCategories.find(c =>
+                c === category ||
+                category.includes(c) ||
+                c.includes(category)
+              )
+              category = found || 'other'
+            }
+
+            // Use the original casing from the list
+            const originalCategory = categories.find(
+              (c: string) => c.toLowerCase().trim() === category
+            ) || category
 
             return {
               id: ticket.id,
               text: ticket.text,
-              category,
+              category: originalCategory,
             }
           } catch (err: any) {
             return {
@@ -75,9 +95,17 @@ Rules:
 
   } catch (error: any) {
     console.error('Classification error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Classification failed' },
-      { status: 500 }
-    )
+
+    // User-friendly error messages
+    let message = 'Classification failed'
+    if (error.message?.includes('401')) {
+      message = 'Invalid API key'
+    } else if (error.message?.includes('429')) {
+      message = 'Rate limited - please wait and try again'
+    } else if (error.message?.includes('insufficient_quota')) {
+      message = 'API quota exceeded - check your OpenAI billing'
+    }
+
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

@@ -70,9 +70,9 @@ Typical cost: ~$0.01 per 100 tickets
 
 ## Privacy
 
-- API key stored in browser localStorage only
-- Tickets sent directly to OpenAI via server-side proxy
-- No analytics, cookies, or tracking
+- API key stored in browser localStorage
+- Requests proxied through our API route (never logged) then sent to OpenAI
+- No database, no analytics, no cookies, no tracking
 - Open source - audit the code
 
 ## Sample data

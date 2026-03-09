@@ -358,3 +358,54 @@ footer a {
   display: flex;
   gap: 0.5rem;
 }
+
+/* Mobile responsive */
+@media (max-width: 600px) {
+  body {
+    padding: 1rem;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  .key-input-row {
+    flex-direction: column;
+  }
+
+  .key-input-row button {
+    width: 100%;
+  }
+
+  .upload-zone {
+    padding: 2rem 1rem;
+  }
+
+  .results-stats {
+    gap: 1rem;
+  }
+
+  .stat-value {
+    font-size: 1.5rem;
+  }
+
+  .preview-table td {
+    max-width: 200px;
+  }
+
+  .action-buttons {
+    flex-direction: column;
+  }
+
+  .action-buttons button {
+    width: 100%;
+  }
+
+  .add-category {
+    flex-direction: column;
+  }
+
+  .add-category button {
+    width: 100%;
+  }
+}
